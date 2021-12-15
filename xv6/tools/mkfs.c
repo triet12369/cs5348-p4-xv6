@@ -74,7 +74,10 @@ mkfs(int nblocks, int ninodes, int size) {
   sb.nblocks = xint(nblocks); // so whole disk is size sectors
   sb.ninodes = xint(ninodes);
 
-  bitblocks = size/(512*8) + 1;
+  //995 200 1024
+
+  bitblocks = size/(512*8) + 1; //1 bitblock 
+  //
   usedblocks = ninodes / IPB + 3 + bitblocks;
   freeblock = usedblocks;
 
@@ -233,6 +236,7 @@ main(int argc, char *argv[])
 
   exit(0);
 }
+
 
 void
 wsect(uint sec, void *buf)
