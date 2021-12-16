@@ -1,5 +1,14 @@
 //Inode Addrs[]=x, where x is the stored the data block number 
 //you can add uint to a char pointer variable. the uint represents bytes
+
+//testcases 
+//badinode : pass
+//badaddr : pass
+//badindir1 : pass
+//badindir2 : pass
+//badroot :pass
+//badroot2 : pass 
+
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -13,6 +22,7 @@
 
 #include "../include/types.h"
 #include "../include/fs.h"
+#include "string.h"
 
 #define T_DIR  1   // Directory
 #define T_FILE 2   // File
@@ -21,7 +31,7 @@
 
 int check_inode_type(struct dinode *);
 int check_valid_block_address(struct dinode *, uint,int,char*);
-int check_root_dir_exists(struct dinode *);
+int check_root_dir_exists(struct dirent *);
 //uint x= sizeof(struct dinode);
 //printf("inode size is : %u \n",x);
 // result : 64 bytes 
@@ -33,7 +43,7 @@ int
 main(int argc, char *argv[])
 {
   int totalblocks, datablocks, totalinodes;
-  int i,n,fsfd;
+  int i,fsfd;
   char *addr;
   char *blockaddr;
   struct dinode *dip;
@@ -60,6 +70,8 @@ main(int argc, char *argv[])
 
   //to get the file size for an arbitrary FS .img
   int size_fstat = object1.st_size;
+  int y = (int)object1.st_nlink;
+  printf("\n%d\n",y);
 
   addr = mmap(NULL, size_fstat, PROT_READ, MAP_PRIVATE, fsfd, 0);
   if (addr == MAP_FAILED){
@@ -82,13 +94,12 @@ main(int argc, char *argv[])
 
   //block starting address why 4? 1 unused, 1 super, 1 bit block, 1 extra for inode idk why
   blockaddr=  (char *) (addr + (totalinodes/IPB + 4)*BLOCK_SIZE);
-  //blockaddr += BLOCK_SIZE;
 
   //Loop to check the error cases // return val 0 is everythings good 
   int x;
   //this value gets set to true if the exclusion to ERROR 3 conditions are met
-  bool root_directory_cond =false;
-  int error3=1;
+  bool good_root_directory=false;
+  int error3=2;
   for(i=ROOTINO;i<totalinodes;i++){
     //check for error 1
     x=check_inode_type(&(dip[i]));
@@ -113,15 +124,26 @@ main(int argc, char *argv[])
 
     //check for error 3
     //check type and then call it
-    if(dip[i].type==T_DIR) error3=check_root_dir_exists(&dip[i]);
-    if(error3==0) root_directory_cond=true;
-    if(i==(totalinodes-1)&& !root_directory_cond){
+    if(dip[i].type==T_DIR && !good_root_directory) {
+      de = (struct dirent *) (addr + (dip[i].addrs[0])*BLOCK_SIZE);
+      error3=check_root_dir_exists(de);
+      if(error3==0) good_root_directory=true;
+      if(error3==1) {
+        /*'badroot'	 'file system with a root directory in bad location'
+        'badroot2'	 'file system with a bad root directory in good location'
+        */
+        //parent not right || inode number is wrong
+        fprintf(stderr,"CASE FOR BAD ROOT DIRECTORY\n");
+        fprintf(stderr,"ERROR: root directory does not exist.\n");
+        close(fsfd);
+        exit(1);
+        }
+    }
+    if(i==(totalinodes-1)&& !good_root_directory){
       fprintf(stderr,"ERROR: root directory does not exist.\n");
       close(fsfd);
       exit(1);
     }
-
- 
   }
   fprintf(stdout,"Good File System.\n");
 
@@ -140,7 +162,7 @@ main(int argc, char *argv[])
   // printf("a:%u b:%u a2:%u b2:%u addr:%p c:%p \n",a,b,a2,b2,addr,c);
   
   de = (struct dirent *) (addr + (dip[ROOTINO].addrs[0])*BLOCK_SIZE);
-
+  //i can get the name of the direcotry from dirent 
   
     // get the address of root dir 
   
@@ -155,11 +177,7 @@ main(int argc, char *argv[])
 
   // print the entries in the first block of root dir 
 
-  n = dip[ROOTINO].size/sizeof(struct dirent);
-  for (i = 0; i < n; i++,de++){
- 	printf(" inum %d, name %s ", de->inum, de->name);
-  	printf("inode  size %d links %d type %d \n", dip[de->inum].size, dip[de->inum].nlink, dip[de->inum].type);
-  }
+ 
   exit(0);
 
 }
@@ -174,24 +192,39 @@ int check_valid_block_address(struct dinode *ptr,uint bitblock_num,int totalbloc
   int i;
   uint lastblock = totalblocks-1;
   //+1 to check the ndirect block data block
-  for (i=0; i<NDIRECT+1;i++){
+  for (i=0; i<NDIRECT;i++){
     //used and out of range 
     if(ptr->addrs[i]!=0 && (ptr->addrs[i]<(bitblock_num+1) ||ptr->addrs[i]>lastblock))return 1;
   }
   //check Indirect block if its not empty 
   if(ptr->addrs[NDIRECT]!=0){
+    if(ptr->addrs[NDIRECT]<(bitblock_num+1) ||ptr->addrs[NDIRECT]>lastblock)return 2;
     uint indirectblocknum = ptr->addrs[NDIRECT];
     uint *IDB=(uint*)(addr+indirectblocknum*BLOCK_SIZE);
     for(i=0; i < NINDIRECT; i++){
-      printf("IDB[i] : %p ",IDB);
-      printf("*TDB[i]:%u \n",IDB[i]);
+      //printf("IDB[i] : %p ",IDB);
+      //printf("*TDB[i]:%u \n",IDB[i]);
       if(IDB[i]!=0 && (IDB[i]<(bitblock_num+1) ||IDB[i]>lastblock))return 2;
     }
   }
   return 0;
 }
 
-int check_root_dir_exists(struct dinode *ptr){
-  return 0;
-
+int check_root_dir_exists(struct dirent *de){
+  char name[]=".";
+  if(de->inum ==1){
+    if (strcmp(name,de->name)==0){
+      printf("ROOT DIRECTORY inode number and name match !\n");
+      de++;
+      if(de->inum ==1) {printf("ROOT DIRECTORY parent good too !\n");return 0;}
+    }
+    return 1; //returns 1 if root dir name dont match with inum 1 or parent dir
+    //dont point to itself
+  }
+  if(strcmp(name,de->name)==0) return 1; // root directory exists but has a bad inumber(!1)
+  return 2;
 }
+
+//	printf(" inum %d, name %s ", de->inum, de->name);
+//	printf("inode  size %d links %d type %d \n", dip[de->inum].size, dip[de->inum].nlink, dip[de->inum].type);
+  
