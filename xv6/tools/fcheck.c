@@ -7,7 +7,10 @@
 //badindir1 : pass
 //badindir2 : pass
 //badroot :pass
-//badroot2 : pass 
+//badroot2 : pass
+//badfmt: pass
+//mrkfree: pass if i comment out error 4 check
+//indirfree: pass if i comment out error 4 check 
 
 #include <stdio.h>
 #include <sys/types.h>
@@ -31,7 +34,9 @@
 
 int check_inode_type(struct dinode *);
 int check_valid_block_address(struct dinode *, uint,int,char*);
-int check_root_dir_exists(struct dirent *);
+int check_root_dir_exists(struct dinode *,struct dirent *,int);
+int check_dir_format(struct dinode *,struct dirent *,int);
+int check_inuseinodes_bitmap(uint *,struct dinode *,char*);
 //uint x= sizeof(struct dinode);
 //printf("inode size is : %u \n",x);
 // result : 64 bytes 
@@ -45,7 +50,8 @@ main(int argc, char *argv[])
   int totalblocks, datablocks, totalinodes;
   int i,fsfd;
   char *addr;
-  char *blockaddr;
+  //char *blockaddr;
+  uint *bitblockstartaddr;
   struct dinode *dip;
   struct superblock *sb;
   struct dirent *de;
@@ -93,22 +99,29 @@ main(int argc, char *argv[])
   printf("bitmap_blocknumber : %u\n",bitmap_blocknumber);
 
   //block starting address why 4? 1 unused, 1 super, 1 bit block, 1 extra for inode idk why
-  blockaddr=  (char *) (addr + (totalinodes/IPB + 4)*BLOCK_SIZE);
+  //blockaddr=  (char *) (addr + (totalinodes/IPB + 4)*BLOCK_SIZE);
+  //set bitblock addr 
+  bitblockstartaddr=(uint *)(addr + (totalinodes/IPB + 3)*BLOCK_SIZE);
+  
+  
+  //printf("bit block is %d, bit block start address is %p ",)
 
   //Loop to check the error cases // return val 0 is everythings good 
   int x;
   //this value gets set to true if the exclusion to ERROR 3 conditions are met
   bool good_root_directory=false;
   int error3=2;
+  int error4=0;
+  int error5=0;
   for(i=ROOTINO;i<totalinodes;i++){
-    //check for error 1
+    //Error 1
     x=check_inode_type(&(dip[i]));
     if(x==1){
       fprintf(stderr,"ERROR: bad inode.\n");
       close(fsfd);
       exit(1);
     }
-    //check for error 2
+    //Error 2
     if(dip[i].type!=0){x=check_valid_block_address(&(dip[i]),bitmap_blocknumber,totalblocks,addr);}
     if(x==1){
       fprintf(stderr,"ERROR: bad direct address in inode.\n");
@@ -122,16 +135,24 @@ main(int argc, char *argv[])
     }
     else;
 
-    //check for error 3
+    //Error 4 
+    if(dip[i].type==T_DIR){
+      de = (struct dirent *) (addr + (dip[i].addrs[0])*BLOCK_SIZE);
+      error4=check_dir_format(&dip[i],de,i);
+      if(error4==1){
+        fprintf(stderr,"ERROR: directory not properly formatted.\n");
+        close(fsfd);
+        exit(1);
+      }
+    }
+
+    //Error 3
     //check type and then call it
     if(dip[i].type==T_DIR && !good_root_directory) {
       de = (struct dirent *) (addr + (dip[i].addrs[0])*BLOCK_SIZE);
-      error3=check_root_dir_exists(de);
+      error3=check_root_dir_exists(&dip[i],de,i);
       if(error3==0) good_root_directory=true;
       if(error3==1) {
-        /*'badroot'	 'file system with a root directory in bad location'
-        'badroot2'	 'file system with a bad root directory in good location'
-        */
         //parent not right || inode number is wrong
         fprintf(stderr,"CASE FOR BAD ROOT DIRECTORY\n");
         fprintf(stderr,"ERROR: root directory does not exist.\n");
@@ -144,6 +165,15 @@ main(int argc, char *argv[])
       close(fsfd);
       exit(1);
     }
+
+    //Error 5 bitblockstartaddr
+    error5 = check_inuseinodes_bitmap(bitblockstartaddr,&dip[i],addr);
+    if(error5==1){
+      fprintf(stderr,"ERROR: address used by inode but marked free in bitmap.\n");
+      close(fsfd);
+      exit(1);
+    }
+
   }
   fprintf(stdout,"Good File System.\n");
 
@@ -163,14 +193,22 @@ main(int argc, char *argv[])
   
   de = (struct dirent *) (addr + (dip[ROOTINO].addrs[0])*BLOCK_SIZE);
   //i can get the name of the direcotry from dirent 
+
+  // print the entries in the first block of root dir 
+
+  // int n = dip[ROOTINO].size/sizeof(struct dirent);
+  // for (i = 0; i < n; i++,de++){
+ 	// printf(" inum %d, name %s ", de->inum, de->name);
+  // 	printf("inode  size %d links %d type %d \n", dip[de->inum].size, dip[de->inum].nlink, dip[de->inum].type);
+  // }
   
     // get the address of root dir 
   
-  printf("root inode address stored in direct block 0 : %p\n",de);
-  printf("root inode address stored in direct block 0 : %p\n",de);
-  printf("value I calculated for starting block: %p\n",blockaddr);
-  printf("value I calculated for starting block: %ld\n",(long int)blockaddr);
-  printf("root directory name and inode number : %s,%u\n",de->name,de->inum);
+  // printf("root inode address stored in direct block 0 : %p\n",de);
+  // printf("root inode address stored in direct block 0 : %p\n",de);
+  // printf("value I calculated for starting block: %p\n",blockaddr);
+  // printf("value I calculated for starting block: %ld\n",(long int)blockaddr);
+  // printf("root directory name and inode number : %s,%u\n",de->name,de->inum);
 
   // need ptr to bitmap kernel/fs.c -> balloc()
   //mkfs balloc
@@ -210,21 +248,110 @@ int check_valid_block_address(struct dinode *ptr,uint bitblock_num,int totalbloc
   return 0;
 }
 
-int check_root_dir_exists(struct dirent *de){
+int check_root_dir_exists(struct dinode * dip,struct dirent *de,int inumber){
+  int i;
   char name[]=".";
-  if(de->inum ==1){
-    if (strcmp(name,de->name)==0){
-      printf("ROOT DIRECTORY inode number and name match !\n");
-      de++;
-      if(de->inum ==1) {printf("ROOT DIRECTORY parent good too !\n");return 0;}
+  char parentdir[]="..";
+  bool foundone=false;
+  bool foundtwo=false;
+  int n = dip->size/sizeof(struct dirent);
+  //handles the case the inumber we are looking at is not 1 but everything
+  //else matches with conditions for it to be the root inode 
+  for (i = 0; i < n; i++,de++){
+    if(de->inum ==1){
+      if (strcmp(name,de->name)==0){ if(de->inum==inumber) foundone=true;}
     }
-    return 1; //returns 1 if root dir name dont match with inum 1 or parent dir
-    //dont point to itself
+    if(de->inum ==1){
+      if (strcmp(parentdir,de->name)==0){ if(de->inum==inumber) foundtwo=true;}
+    }
+    if(foundone && foundtwo){printf("found root inode!");return 0;}
   }
-  if(strcmp(name,de->name)==0) return 1; // root directory exists but has a bad inumber(!1)
-  return 2;
+  if(!foundone && !foundtwo) return 2;
+  return 1;
+  
 }
 
+int check_dir_format(struct dinode * dip,struct dirent *de,int inodenumber){
+  int i;
+  char dirname[]=".";
+  char parentdir[]="..";
+  bool foundone=false;
+  bool foundtwo=false;
+  int n = dip->size/sizeof(struct dirent);
+  for (i = 0; i < n; i++,de++){
+    if(strcmp(dirname,de->name)!=0){
+      if(de->inum==inodenumber)foundone=true;
+      else return 1;
+    } 
+    if(strcmp(parentdir,de->name)!=0) foundtwo=true;
+    if(foundone && foundtwo) {/* printf("foundone and foundtwo works\n"); */return 0;}
+  }
+  return 1;
+}
+
+
+int check_inuseinodes_bitmap(uint *bitblockstartaddr,struct dinode *ptr,char *addr){
+  //uint bitblock=28;
+  //uint uintsperblock = BLOCK_SIZE/sizeof(uint); //128//size of uint=4 bytes=32 bits
+  //subtract amount = 29 //29 is the first datablock. 
+  //so block 29 needs to be stored in the first bit of the bitmap 
+  // hence 29-29 = 0th bit
+  //each uint represents 32 bits 
+  //uint starting_block =29;
+  int i;
+  uint set_to_starting;
+  uint unit = sizeof(uint)*8;
+  //printf("unit size : %u \n",unit);
+  uint which_uint;
+  uint value;
+  uint which_bit;
+  //uint lastblock = totalblocks-1;
+  //+1 to check the ndirect block data block
+  for (i=0; i<NDIRECT+1;i++){
+    //used and out of range 
+    if(ptr->addrs[i]!=0 ){
+      set_to_starting=ptr->addrs[i];
+      which_uint=set_to_starting/unit; //0
+      which_bit=set_to_starting%unit; //0
+      //think if i got exactly 32 then 32/32 =1 but i still need to look at zero index
+      value = bitblockstartaddr[which_uint];
+      //printf("value read as the integer : %u\n",value);
+      if(value & (1<<which_bit)){/*bit set to high we good*/}
+      else{
+         printf("bitblock value not correct DIRECT BLOCK.\n");
+        // printf("bitblockstartaddr[which_uint] : %u",bitblockstartaddr[which_uint]);
+        // printf("ptr.addrs[%d]:%u   set_to_starting = %u\n",i,ptr->addrs[i],set_to_starting);
+        return 1;
+      }
+    }
+  }
+  //check Indirect block if its not empty 
+
+ 
+  uint indirectblocknum = ptr->addrs[NDIRECT];
+  uint *IDB=(uint*)(addr+indirectblocknum*BLOCK_SIZE);
+  for(i=0; i < NINDIRECT; i++){
+    //printf("IDB[i] : %p ",IDB);
+    //printf("*TDB[i]:%u \n",IDB[i]);
+    if(IDB[i]!=0){
+      set_to_starting=IDB[i];
+      //printf("IDB[%d]:%u   set_to_starting = %u\n",i,IDB[i],set_to_starting);
+      which_uint=set_to_starting/unit;
+      which_bit=set_to_starting%unit;
+      value = bitblockstartaddr[which_uint];
+      if(value & (1<<which_bit)){
+      //bit set to high we good
+      }
+      else{
+        //printf ("value for failure : %u\n", value);
+        printf("bitblock value not correct INDIRECT BLOCK.\n");
+        return 1;
+      }
+    }  
+  }
+  //printf("end of bitmap check for loop. means bitmap is good!\n");
+  return 0;
+}
 //	printf(" inum %d, name %s ", de->inum, de->name);
 //	printf("inode  size %d links %d type %d \n", dip[de->inum].size, dip[de->inum].nlink, dip[de->inum].type);
-  
+
