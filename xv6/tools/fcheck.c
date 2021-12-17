@@ -38,6 +38,8 @@
 uint blocks_used[1025];
 int direct_address_counter[1025];
 int indirect_address_counter[1025];
+//int inodes_marked_inuse[200];
+//int inodes_found_in_directory[200];
 int check_inode_type(struct dinode *);
 int check_valid_block_address(struct dinode *, uint,int,char*);
 int check_root_dir_exists(struct dinode *,struct dirent *,int);
@@ -46,6 +48,8 @@ int check_inuseinodes_bitmap(uint *,struct dinode *,char*);
 int check_inusebitmap_inodes(uint*);
 int check_direct_address_use();
 int check_indirect_address_use();
+void find_directory_entries(struct dinode * ,struct dirent *,int,int*);
+int check_inode_exists_in_directory(int*,int*);
 //uint x= sizeof(struct dinode);
 //printf("inode size is : %u \n",x);
 // result : 64 bytes 
@@ -67,6 +71,7 @@ main(int argc, char *argv[])
   int error6=0;
   int error7=0;
   int error8=0;
+  int error9=0;
   //char *blockaddr;
   uint *bitblockstartaddr;
   struct dinode *dip;
@@ -107,17 +112,15 @@ main(int argc, char *argv[])
   totalblocks=sb->size;
   //datablocks=sb->nblocks;
   totalinodes=sb->ninodes;
+  // int inodes_marked_inuse[totalinodes];
+  // int inodes_found_in_directory[totalinodes];
   //printf("fs size %d, no. of blocks %d, no. of inodes %d \n", totalblocks, datablocks, totalinodes);
   
   /* read the inodes */ //disk inode pointer 
   dip = (struct dinode *) (addr + IBLOCK((uint)0)*BLOCK_SIZE); 
   //printf("begin addr %p, begin inode %p , offset %ld \n", addr, dip, (char *)dip -addr);
   bitmap_blocknumber=totalinodes/IPB+3;
-  //printf("bitmap_blocknumber : %u\n",bitmap_blocknumber);
-
-  //block starting address why 4? 1 unused, 1 super, 1 bit block, 1 extra for inode idk why
-  //blockaddr=  (char *) (addr + (totalinodes/IPB + 4)*BLOCK_SIZE);
-  //set bitblock addr 
+ 
   bitblockstartaddr=(uint *)(addr + (totalinodes/IPB + 3)*BLOCK_SIZE);
   
   
@@ -134,7 +137,12 @@ main(int argc, char *argv[])
       exit(1);
     }
     //Error 2
-    if(dip[i].type!=0){x=check_valid_block_address(&(dip[i]),bitmap_blocknumber,totalblocks,addr);}
+    if(dip[i].type!=0){
+      x=check_valid_block_address(&(dip[i]),bitmap_blocknumber,totalblocks,addr);
+      //inodes_marked_inuse[i]= inodes_marked_inuse[i]+1;
+    }
+
+
     if(x==1){
       fprintf(stderr,"ERROR: bad direct address in inode.\n");
       close(fsfd);
@@ -166,7 +174,7 @@ main(int argc, char *argv[])
       if(error3==0) good_root_directory=true;
       if(error3==1) {
         //parent not right || inode number is wrong
-        fprintf(stderr,"CASE FOR BAD ROOT DIRECTORY\n");
+        //fprintf(stderr,"CASE FOR BAD ROOT DIRECTORY\n");
         fprintf(stderr,"ERROR: root directory does not exist.\n");
         close(fsfd);
         exit(1);
@@ -177,6 +185,9 @@ main(int argc, char *argv[])
       close(fsfd);
       exit(1);
     }
+    //To Handle Case 9
+    //de = (struct dirent *) (addr + (dip[i].addrs[0])*BLOCK_SIZE);
+    //find_directory_entries(&dip[i],de,i,inodes_found_in_directory);
 
     //Error 5 bitblockstartaddr
     error5 = check_inuseinodes_bitmap(bitblockstartaddr,&dip[i],addr);
@@ -206,11 +217,13 @@ main(int argc, char *argv[])
     close(fsfd);
     exit(1);
   }
-
+  //error9=check_inode_exists_in_directory(inodes_marked_inuse,inodes_found_in_directory);
+  if(error9==1){
+    fprintf(stderr,"ERROR: inode marked use but not found in a directory.\n");
+    close(fsfd);
+    exit(1);
+  }
   fprintf(stdout,"Good File System.\n");
-
-
-
   exit(0);
 }
 
@@ -411,39 +424,21 @@ int check_indirect_address_use(){
   return 0;
 }
 
-  //printf("Root inode  size %d links %d type %d \n", dip[ROOTINO].size, dip[ROOTINO].nlink, dip[ROOTINO].type);
 
+void find_directory_entries(struct dinode * dip,struct dirent *de,int inumber,int*inodes_found_in_directory){
+  int i;
+  int n = dip->size/sizeof(struct dirent);
+  //handles the case the inumber we are looking at is not 1 but everything
+  //else matches with conditions for it to be the root inode 
+  for (i = 0; i < n;i++,de++){
+    inodes_found_in_directory[de->inum] =inodes_found_in_directory[de->inum]+1;
+  }
+}
 
-  // uint a =dip[ROOTINO].addrs[0]; //data block 0 block number :29
-  // uint b =dip[ROOTINO].addrs[0]*BLOCK_SIZE;
-  // char *c = (char *)(addr+b);
-  // uint a2 =dip[2].addrs[0];
-  // uint b2 =dip[2].addrs[0]*BLOCK_SIZE;
-  // //uint c =(uint)(addr + (dip[ROOTINO].addrs[0])*BLOCK_SIZE);
-  // printf("a:%u b:%u a2:%u b2:%u addr:%p c:%p \n",a,b,a2,b2,addr,c);
-  
-  //de = (struct dirent *) (addr + (dip[ROOTINO].addrs[0])*BLOCK_SIZE);
-  //i can get the name of the direcotry from dirent 
-
-  // print the entries in the first block of root dir 
-
-  // int n = dip[ROOTINO].size/sizeof(struct dirent);
-  // for (i = 0; i < n; i++,de++){
- 	// printf(" inum %d, name %s ", de->inum, de->name);
-  // 	printf("inode  size %d links %d type %d \n", dip[de->inum].size, dip[de->inum].nlink, dip[de->inum].type);
-  // }
-  
-    // get the address of root dir 
-  
-  // printf("root inode address stored in direct block 0 : %p\n",de);
-  // printf("root inode address stored in direct block 0 : %p\n",de);
-  // printf("value I calculated for starting block: %p\n",blockaddr);
-  // printf("value I calculated for starting block: %ld\n",(long int)blockaddr);
-  // printf("root directory name and inode number : %s,%u\n",de->name,de->inum);
-
-  // need ptr to bitmap kernel/fs.c -> balloc()
-  //mkfs balloc
-
-  // print the entries in the first block of root dir 
-
- 
+int check_inode_exists_in_directory(int *inodes_marked_inuse,int *inodes_found_in_directory){
+  int i;
+  for(i=0;i<200;i++){
+    if(inodes_marked_inuse[i]!=inodes_found_in_directory[i]) return 1;
+  }
+  return 0;
+}
