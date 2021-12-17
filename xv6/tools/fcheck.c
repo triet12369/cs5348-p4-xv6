@@ -9,8 +9,8 @@
 //badroot :pass
 //badroot2 : pass
 //badfmt: pass
-//mrkfree: pass if i comment out error 4 check
-//indirfree: pass if i comment out error 4 check 
+//mrkfree: pass 
+//indirfree: pass
 
 #include <stdio.h>
 #include <sys/types.h>
@@ -180,7 +180,7 @@ main(int argc, char *argv[])
   
 
 
-  printf("Root inode  size %d links %d type %d \n", dip[ROOTINO].size, dip[ROOTINO].nlink, dip[ROOTINO].type);
+  //printf("Root inode  size %d links %d type %d \n", dip[ROOTINO].size, dip[ROOTINO].nlink, dip[ROOTINO].type);
 
 
   // uint a =dip[ROOTINO].addrs[0]; //data block 0 block number :29
@@ -191,7 +191,7 @@ main(int argc, char *argv[])
   // //uint c =(uint)(addr + (dip[ROOTINO].addrs[0])*BLOCK_SIZE);
   // printf("a:%u b:%u a2:%u b2:%u addr:%p c:%p \n",a,b,a2,b2,addr,c);
   
-  de = (struct dirent *) (addr + (dip[ROOTINO].addrs[0])*BLOCK_SIZE);
+  //de = (struct dirent *) (addr + (dip[ROOTINO].addrs[0])*BLOCK_SIZE);
   //i can get the name of the direcotry from dirent 
 
   // print the entries in the first block of root dir 
@@ -222,7 +222,7 @@ main(int argc, char *argv[])
 
 int check_inode_type(struct dinode *ptr){
   int t=ptr->type;
-  if(t==0 || t==T_FILE || t ==T_DEV || t==T_DIR){printf("inode type: %d\n",t); return 0;}
+  if(t==0 || t==T_FILE || t ==T_DEV || t==T_DIR){/*printf("inode type: %d\n",t);*/ return 0;}
   else{return 1;}
 }
 
@@ -264,7 +264,7 @@ int check_root_dir_exists(struct dinode * dip,struct dirent *de,int inumber){
     if(de->inum ==1){
       if (strcmp(parentdir,de->name)==0){ if(de->inum==inumber) foundtwo=true;}
     }
-    if(foundone && foundtwo){printf("found root inode!");return 0;}
+    if(foundone && foundtwo){/*printf("found root inode!");*/return 0;}
   }
   if(!foundone && !foundtwo) return 2;
   return 1;
@@ -279,11 +279,11 @@ int check_dir_format(struct dinode * dip,struct dirent *de,int inodenumber){
   bool foundtwo=false;
   int n = dip->size/sizeof(struct dirent);
   for (i = 0; i < n; i++,de++){
-    if(strcmp(dirname,de->name)!=0){
+    if(strcmp(dirname,de->name)==0){
       if(de->inum==inodenumber)foundone=true;
       else return 1;
     } 
-    if(strcmp(parentdir,de->name)!=0) foundtwo=true;
+    if(strcmp(parentdir,de->name)==0) foundtwo=true;
     if(foundone && foundtwo) {/* printf("foundone and foundtwo works\n"); */return 0;}
   }
   return 1;
