@@ -12,6 +12,8 @@
 //mrkfree: pass 
 //indirfree: pass
 //mrkused : pass
+//addronce : pass
+//addronce2: pass
 
 #include <stdio.h>
 #include <sys/types.h>
@@ -33,13 +35,17 @@
 #define T_DEV  3   // Special device
 #define BLOCK_SIZE (BSIZE)
 
-int blocks_used[1025];
+uint blocks_used[1025];
+int direct_address_counter[1025];
+int indirect_address_counter[1025];
 int check_inode_type(struct dinode *);
 int check_valid_block_address(struct dinode *, uint,int,char*);
 int check_root_dir_exists(struct dinode *,struct dirent *,int);
 int check_dir_format(struct dinode *,struct dirent *,int);
 int check_inuseinodes_bitmap(uint *,struct dinode *,char*);
 int check_inusebitmap_inodes(uint*);
+int check_direct_address_use();
+int check_indirect_address_use();
 //uint x= sizeof(struct dinode);
 //printf("inode size is : %u \n",x);
 // result : 64 bytes 
@@ -50,9 +56,17 @@ int check_inusebitmap_inodes(uint*);
 int
 main(int argc, char *argv[])
 {
-  int totalblocks, datablocks, totalinodes;
+  int totalblocks, totalinodes;
   int i,fsfd;
   char *addr;
+  int x;
+  bool good_root_directory=false;
+  int error3=2;
+  int error4=0;
+  int error5=0;
+  int error6=0;
+  int error7=0;
+  int error8=0;
   //char *blockaddr;
   uint *bitblockstartaddr;
   struct dinode *dip;
@@ -79,8 +93,8 @@ main(int argc, char *argv[])
 
   //to get the file size for an arbitrary FS .img
   int size_fstat = object1.st_size;
-  int y = (int)object1.st_nlink;
-  printf("\n%d\n",y);
+ 
+  //printf("\n%d\n",y);
 
   addr = mmap(NULL, size_fstat, PROT_READ, MAP_PRIVATE, fsfd, 0);
   if (addr == MAP_FAILED){
@@ -91,15 +105,15 @@ main(int argc, char *argv[])
   /* read the super block */
   sb = (struct superblock *) (addr + 1 * BLOCK_SIZE);
   totalblocks=sb->size;
-  datablocks=sb->nblocks;
+  //datablocks=sb->nblocks;
   totalinodes=sb->ninodes;
-  printf("fs size %d, no. of blocks %d, no. of inodes %d \n", totalblocks, datablocks, totalinodes);
+  //printf("fs size %d, no. of blocks %d, no. of inodes %d \n", totalblocks, datablocks, totalinodes);
   
   /* read the inodes */ //disk inode pointer 
   dip = (struct dinode *) (addr + IBLOCK((uint)0)*BLOCK_SIZE); 
-  printf("begin addr %p, begin inode %p , offset %ld \n", addr, dip, (char *)dip -addr);
+  //printf("begin addr %p, begin inode %p , offset %ld \n", addr, dip, (char *)dip -addr);
   bitmap_blocknumber=totalinodes/IPB+3;
-  printf("bitmap_blocknumber : %u\n",bitmap_blocknumber);
+  //printf("bitmap_blocknumber : %u\n",bitmap_blocknumber);
 
   //block starting address why 4? 1 unused, 1 super, 1 bit block, 1 extra for inode idk why
   //blockaddr=  (char *) (addr + (totalinodes/IPB + 4)*BLOCK_SIZE);
@@ -110,13 +124,7 @@ main(int argc, char *argv[])
   //printf("bit block is %d, bit block start address is %p ",)
 
   //Loop to check the error cases // return val 0 is everythings good 
-  int x;
-  //this value gets set to true if the exclusion to ERROR 3 conditions are met
-  bool good_root_directory=false;
-  int error3=2;
-  int error4=0;
-  int error5=0;
-  int error6=0;
+  
   for(i=ROOTINO;i<totalinodes;i++){
     //Error 1
     x=check_inode_type(&(dip[i]));
@@ -185,8 +193,23 @@ main(int argc, char *argv[])
       fprintf(stderr,"ERROR: bitmap marks block in use but it is not in use.\n");
       close(fsfd);
       exit(1);
-    }
+  }
+  error7= check_direct_address_use();
+  if(error7==1){
+    fprintf(stderr,"ERROR: direct address used more than once.\n");
+    close(fsfd);
+    exit(1);
+  }
+  error8= check_indirect_address_use();
+  if(error8==1){
+    fprintf(stderr,"ERROR: indirect address used more than once.\n");
+    close(fsfd);
+    exit(1);
+  }
+
   fprintf(stdout,"Good File System.\n");
+
+
 
   exit(0);
 }
@@ -286,6 +309,8 @@ int check_inuseinodes_bitmap(uint *bitblockstartaddr,struct dinode *ptr,char *ad
     if(ptr->addrs[i]!=0 ){
       set_to_starting=ptr->addrs[i];
       blocks_used[set_to_starting]=1;
+      //printf("direct set : %u \n ", set_to_starting);
+      direct_address_counter[set_to_starting] +=1;
       which_uint=set_to_starting/unit; //0
       which_bit=set_to_starting%unit; //0
       //think if i got exactly 32 then 32/32 =1 but i still need to look at zero index
@@ -308,6 +333,8 @@ int check_inuseinodes_bitmap(uint *bitblockstartaddr,struct dinode *ptr,char *ad
     if(IDB[i]!=0){
       set_to_starting=IDB[i];
       blocks_used[set_to_starting]=1;
+      //printf("indirect set : %u \n ", set_to_starting);
+      indirect_address_counter[set_to_starting]+=1;
       //printf("IDB[%d]:%u   set_to_starting = %u\n",i,IDB[i],set_to_starting);
       which_uint=set_to_starting/unit;
       which_bit=set_to_starting%unit;
@@ -317,7 +344,7 @@ int check_inuseinodes_bitmap(uint *bitblockstartaddr,struct dinode *ptr,char *ad
       }
       else{
         //printf ("value for failure : %u\n", value);
-        printf("bitblock value not correct INDIRECT BLOCK.\n");
+        //printf("bitblock value not correct INDIRECT BLOCK.\n");
         return 1;
       }
     }  
@@ -331,24 +358,58 @@ int check_inuseinodes_bitmap(uint *bitblockstartaddr,struct dinode *ptr,char *ad
 int check_inusebitmap_inodes(uint*bitblockstartaddr){
   int numentries = BLOCK_SIZE/sizeof(uint);
   int i,j;
-  int offset =29;
-  int actual;
-  int value;
-  for( i =0; i < numentries; i++){
+  uint offset =29;
+  uint actual;
+  uint value;
+  for( i =0; i < numentries-1; i++){
     value = bitblockstartaddr[i];
+    //printf("value at start : %u \n",value);
     for( j=0; j<sizeof(uint)*8; j++){
-      if(value & (1<<j)){
-        actual =offset+j+i*sizeof(uint)*8;
-        if(blocks_used[actual]==1);
-        else return 1;
+      if(i==0){
+        if (j>=offset){
+          if(value & (1<<j)){
+            actual = j;
+            if(blocks_used[actual]==1);
+            else {
+            return 1;
+            }
+          }
+
+        }
+      } // i know its horrible, but my brain was losing convolutions at this point
+      // smooth like butter :(
+      else{
+        //i greater than zero
+        if(value & (1<<j)){
+            actual = j+i*32;
+            if(blocks_used[actual]==1);
+            else {
+            return 1;
+            }
+        }
       }
+      
     }
   }
   return 0;
 }
 
 
+int check_direct_address_use(){
+  int i;
+  for(i=0;i<1025;i++){
+    if(direct_address_counter[i]>1) return 1;
+  }
+  return 0;
+}
 
+int check_indirect_address_use(){
+  int i;
+  for(i=0;i<1025;i++){
+    if(indirect_address_counter[i]>1) return 1;
+  }
+  return 0;
+}
 
   //printf("Root inode  size %d links %d type %d \n", dip[ROOTINO].size, dip[ROOTINO].nlink, dip[ROOTINO].type);
 
