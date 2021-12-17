@@ -28,10 +28,14 @@
 #define T_FILE 2   // File
 #define T_DEV  3   // Special device
 #define BLOCK_SIZE (BSIZE)
+#define DIR_ENTRY_PER_BLOCK (BLOCK_SIZE / sizeof(struct dirent))
 
 int check_inode_type(struct dinode *);
 int check_valid_block_address(struct dinode *, uint,int,char*);
 int check_root_dir_exists(struct dirent *);
+int checkMarkedInodeNotInuse(struct dinode *, struct dinode *);
+int countNLinks(struct dinode *, int totalInodes, int inum, int isDir);
+char *addr;
 //uint x= sizeof(struct dinode);
 //printf("inode size is : %u \n",x);
 // result : 64 bytes 
@@ -44,7 +48,6 @@ main(int argc, char *argv[])
 {
   int totalblocks, datablocks, totalinodes;
   int i,fsfd;
-  char *addr;
   char *blockaddr;
   struct dinode *dip;
   struct superblock *sb;
@@ -145,6 +148,32 @@ main(int argc, char *argv[])
       exit(1);
     }
   }
+
+  for(i=ROOTINO;i<totalinodes;i++) {
+    // loop through all inodes again
+    if (dip[i].type==T_DIR) {
+      // error 10
+      if (checkMarkedInodeNotInuse(&dip[i], dip) == 0) {
+        fprintf(stderr,"ERROR: inode referred to in directory but marked free.\n");
+        exit(1);
+      };
+
+      // error 12
+      if (countNLinks(dip, totalinodes, i, 1) > 1) {
+        fprintf(stderr,"ERROR: directory appears more than once in file system.\n");
+        exit(1);
+      }
+    }
+
+    if (dip[i].type == T_FILE) {
+      // printf("Starting check inode %d with %d links\n", i, dip[i].nlink);
+      // error 11
+			if(dip[i].nlink != countNLinks(dip, totalinodes, i, 0)){
+				fprintf(stderr, "ERROR: bad reference count for file.\n");
+				return 1;
+			}
+		}
+  }
   fprintf(stdout,"Good File System.\n");
 
   
@@ -184,8 +213,13 @@ main(int argc, char *argv[])
 
 int check_inode_type(struct dinode *ptr){
   int t=ptr->type;
-  if(t==0 || t==T_FILE || t ==T_DEV || t==T_DIR){printf("inode type: %d\n",t); return 0;}
-  else{return 1;}
+  if(t==0 || t==T_FILE || t ==T_DEV || t==T_DIR){
+    // printf("inode type: %d\n",t);
+    return 0;
+  }
+  else{
+    return 1;
+  }
 }
 
 int check_valid_block_address(struct dinode *ptr,uint bitblock_num,int totalblocks,char *addr){
@@ -223,6 +257,92 @@ int check_root_dir_exists(struct dirent *de){
   }
   if(strcmp(name,de->name)==0) return 1; // root directory exists but has a bad inumber(!1)
   return 2;
+}
+
+int checkMarkedInodeNotInuse(struct dinode* dinode, struct dinode* startInode) {
+
+  struct dirent* de;
+  int error = 0;
+
+  int i, di;
+  for (i = 0; i < NDIRECT; i++) {
+    if (dinode->addrs[i] == 0) continue;
+    for (di = 0; di < DIR_ENTRY_PER_BLOCK; di++) {
+      de = (struct dirent *) (addr + (dinode->addrs[i])*BLOCK_SIZE + di*sizeof(struct dirent));
+      if (de->inum == 0 ) continue;
+      struct dinode* temp;
+      temp = (struct dinode *) (&startInode[de->inum]);
+      if (temp->type == 0) return error;
+    }   
+    // printf("dinode->addrs[i] %d %d\n", dinode->type, dinode->addrs[i]);
+    // printf("block num %d dinode type %d\n", dinode->addrs[i], temp->type);
+  }
+  // now check indirect blocks
+  if (dinode->addrs[NDIRECT] != 0) {
+    uint indirectblocknum = dinode->addrs[NDIRECT];
+    uint *IDB= (uint*) (addr + indirectblocknum*BLOCK_SIZE);
+    for (i = 0; i < NINDIRECT; i++) {
+      // if (IDB[i] == 0) continue;
+      // printf("IDB %d \n", IDB[i]);
+      if (IDB[i] == 0) continue ;
+      for (di = 0; di < DIR_ENTRY_PER_BLOCK; di++) {
+        de = (struct dirent *) (addr + (IDB[i] * BLOCK_SIZE) + di*sizeof(struct dirent));
+        if (de->inum == 0) continue;
+        struct dinode* temp;
+
+        temp = (struct dinode *) (&startInode[de->inum]);
+        if (temp->type == 0) return error;
+      }
+      // printf("dinode->addrs[i] %d %d\n", dinode->type, dinode->addrs[i]);
+      // printf("block num %d dinode type %d\n", dinode->addrs[i], temp->type);
+    }
+  }
+
+  return 1;
+}
+
+int countNLinks(struct dinode* startDinode, int totalInodes, int inum, int isDir) {
+  int count = 0;
+  int i;
+  struct dinode * dinode;
+  struct dirent* de;
+  for (i = ROOTINO; i < totalInodes; i++) {
+    if (isDir && inum == 1) return 1;
+    if (i == inum) continue;
+
+    dinode = (struct dinode*) (&startDinode[i]);
+
+    if (dinode->type != T_DIR) continue; // discard non directory inodes
+
+    int j, di;
+    for (j = 0; j < NDIRECT; j++) {
+      if (dinode->addrs[j] == 0) continue;
+      for (di = 0; di < DIR_ENTRY_PER_BLOCK; di++) {
+        de = (struct dirent *) (addr + (dinode->addrs[j])*BLOCK_SIZE + di*sizeof(struct dirent));
+        if (de->inum == 0) continue;
+        if (de->inum == inum) count++;
+        // printf("Checking de %d %s\n", de->inum, de->name);
+      }
+    }
+    // now check indirect blocks
+    if (dinode->addrs[NDIRECT] != 0) {
+      uint indirectblocknum = dinode->addrs[NDIRECT];
+      uint *IDB= (uint*) (addr + indirectblocknum*BLOCK_SIZE);
+      for (j = 0; j < NINDIRECT; j++) {
+        // if (IDB[i] == 0) continue;
+        // printf("IDB %d \n", IDB[i]);
+        if (IDB[j] == 0) continue ;
+        for (di = 0; di < DIR_ENTRY_PER_BLOCK; di++) {
+          de = (struct dirent *) (addr + (IDB[j] * BLOCK_SIZE) + di*sizeof(struct dirent));
+          if (de->inum == 0) continue;
+          else if (de->inum == inum) count++;
+          // printf("Checking de %d \n", de->inum);
+        }
+      }
+    }
+  }
+  printf("Ref count for inode %d: %d \n", inum, count);
+  return count;
 }
 
 //	printf(" inum %d, name %s ", de->inum, de->name);
